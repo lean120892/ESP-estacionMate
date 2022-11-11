@@ -1,10 +1,18 @@
 
-
 #include <WiFi.h>
 #include <FirebaseESP32.h>
+#include "ThingsBoard.h"
 
 #include "DHT11.h"
 #include "RelojRTC.h"
+
+// to understand how to obtain an access token
+#define TOKEN               "IgiDFYXb6dSbbgZtTB4Y"
+#define THINGSBOARD_SERVER  "thingsboard.cloud"
+// Initialize ThingsBoard client
+WiFiClient espClient;
+// Initialize ThingsBoard instance
+ThingsBoard tb(espClient);
 
 /**** Datos de la Placa ****/
 #define ID_PLACA 0001;
@@ -13,39 +21,63 @@
 /**** Datos de Firebase y WiFI ****/
 #define FIREBASE_HOST "termosolaresp-default-rtdb.firebaseio.com" //Sin http:// o https:// 
 #define FIREBASE_AUTH "aVAbd08k2Bpjrx8kto7zY41bUbBRFEMAJzUtzhyr"
-#define WIFI_SSID "TermoSolar"
-#define WIFI_PASSWORD ""
+#define WIFI_SSID "Casa"
+#define WIFI_PASSWORD "algaleem64659296"
 
 /**** Firebase ****/
 FirebaseData firebaseData;
 String path = "/EstacionMatera/ID_PLACA" ;
 
 /*** Constantes ***/
-const byte btn = 13; // Boton para carga de termo
+const byte btn = 27; // Boton para carga de termo
 const byte bombaOut = 12; //Salida Bomba Agua
 
 /**** Variables ****/
 bool flag = true;
-bool flagBtn = false;
+bool flagBtn_enable = false;
 bool flagWiFi = false;
+bool flagBtn_presionado = false;
+bool flagCargaTermos = false;
+unsigned char tiempoDeCarga =0;
+
 String dato = "";
 int contador = 0;
 int retardo =0;
+int cantidadDeTermos=0;
 
-/*** Interrupcion por boton ***/
-void isr(){
-  flagBtn = true;
+volatile int interruptCounter;
+
+/*** Funcion de interrupcion pora boton carga de agua ***/
+
+ void IRAM_ATTR isr_btn_agua(){
+if(flagBtn_enable){
+  
+  if(flagBtn_presionado){
+    flagBtn_presionado = false;
+    Serial.println("SE SOLTO");
+
+   Serial.println(interruptCounter);
+   tiempoDeCarga = interruptCounter;
+   flagCargaTermos = true;
+    }else{
+      flagBtn_presionado = true;
+      interruptCounter = 0;
+        Serial.println("SE PRESIONO");
+        
+    }
+}
+
   }
 
 /***Configuracion de interrupcion  (timer)***/
-volatile int interruptCounter;
+
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
  
 void IRAM_ATTR onTimer() {
   portENTER_CRITICAL_ISR(&timerMux);
   interruptCounter++;
-  Serial.println(interruptCounter);
+  //Serial.println(interruptCounter);
   portEXIT_CRITICAL_ISR(&timerMux);
  
 }
@@ -53,7 +85,7 @@ void IRAM_ATTR onTimer() {
 void setup() {
     /*** Configuracion GPIO ***/
   pinMode(btn, INPUT_PULLUP);
-  attachInterrupt(btn, isr,LOW); // Interrupcion boton de carga de agua
+  attachInterrupt(btn, isr_btn_agua,CHANGE); // Interrupcion boton de carga de agua
   pinMode(bombaOut, OUTPUT);
   Serial.begin(115200);
 
@@ -81,11 +113,14 @@ void setup() {
                 Serial.print("Conectado con la IP: ");
                 Serial.println(WiFi.localIP());
                 Serial.println();
+                   flagBtn_enable =true;
               }else{
                 Serial.println ("No se pudo conectar a la red Wi-Fi");
                 }
-   timer = timerBegin(0, 800, false);
-   timerAttachInterrupt(timer, &onTimer, false);
+  // timer = timerBegin(0, 800, false);
+   //timerAttachInterrupt(timer, &onTimer, false);
+
+   flagBtn_enable =true;
     }
 
 
@@ -110,13 +145,7 @@ void setup() {
 }
 
 void loop() {
-/*
-if(interruptCounter==20){
-    timer = timerBegin(0, 800, false);
-   timerAttachInterrupt(timer, &onTimer, false);
-   //Serial.println("se freno el contador");
-  }
-*/
+
   if (flag == true){
     MedTempyHum();
     ObtenerTiempoyFecha();
@@ -144,16 +173,39 @@ int nuevosMinutos = ObtenerMinutos();
 
         
       }
-if(flagBtn == true){
+
+ 
+
         while (digitalRead(btn) == LOW){
        digitalWrite( bombaOut, HIGH);
         }
 
         digitalWrite(bombaOut, LOW);
+        if(   tiempoDeCarga >10){
+          Serial.println("Subiendo Datos");
+          
+          tiempoDeCarga =0;
+          flagCargaTermos = false;
+          cantidadDeTermos++;
+          Firebase.setInt(firebaseData, path + "/Cargas/",cantidadDeTermos );
+          }
+
+  if (!tb.connected()) {
+    // Connect to the ThingsBoard
+    Serial.print("Connecting to: ");
+    Serial.print(THINGSBOARD_SERVER);
+    Serial.print(" with token ");
+    Serial.println(TOKEN);
+    if (!tb.connect(THINGSBOARD_SERVER, TOKEN)) {
+      Serial.println("Failed to connect");
+      return;
+    }
   }
+  MedTempyHum();
+    tb.sendTelemetryInt("temperature", temp);
+  tb.sendTelemetryFloat("humidity", hum);
 
+  tb.loop();
 
-  flagBtn = false;
- 
-
-}
+          
+  }
